@@ -1,13 +1,56 @@
+# 端口、跨域等全部取自根目录 .env（docker compose 自动加载）；
+# 拓扑地址（容器互访）在这里声明，不写进 .env，避免容器/本机语义混淆。
 services:
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - APP_ENV=local
+      # 容器内必须监听所有网卡；数据库写入挂载卷
+      BACKEND_HOST: 0.0.0.0
+      DATABASE_PATH: /srv/app/data/app.sqlite3
+      # 前端从容器网络访问后端，跨域来源与前端发布端口保持一致
+      CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-5173} http://127.0.0.1:${FRONTEND_PORT:-5173}"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend-data:/srv/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+
   frontend:
     build: ./frontend
+    env_file:
+      - .env
+    environment:
+      FRONTEND_HOST: 0.0.0.0
+      # Vite 在容器网络里代理到后端服务名；端口固定走容器内 8000
+      VITE_PROXY_TARGET: http://backend:8000
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:5173/
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+volumes:
+  backend-data:

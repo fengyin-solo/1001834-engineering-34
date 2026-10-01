@@ -85,3 +85,8 @@ desktop.ini
 *.db
 *.pid
 *.seed
+
+# ===== 一键脚本运行产物 =====
+logs/
+.run/
+backend/data/
