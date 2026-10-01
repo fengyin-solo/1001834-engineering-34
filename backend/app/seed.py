@@ -653,3 +653,43 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '归档日期': '2026-09-03',
   '档案状态': '管网档案样例3'}]
 }
+
+
+def main(argv: list[str] | None = None) -> int:
+    """初始化示例数据（幂等）：已有数据原样保留，只补缺失的模块。
+
+    重复执行不会污染已有数据；确实需要重建时显式加 --reset。
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="初始化示例数据（幂等，可重复执行）；--reset 丢弃现有数据按内置样例重建"
+    )
+    parser.add_argument("--reset", action="store_true", help="丢弃现有数据，按内置样例重建")
+    args = parser.parse_args(argv)
+
+    from app.config import settings
+    from app.store import store
+
+    if args.reset:
+        store.reset_to_seed()
+        store.persist()
+        print(f"已按内置样例重建数据文件：{settings.data_file}")
+        return 0
+
+    if store.created_on_load:
+        total = sum(len(rows) for rows in SEED_ROWS.values())
+        print(f"数据文件不存在，已用内置样例初始化 {len(SEED_ROWS)} 个模块 / {total} 条记录：{settings.data_file}")
+        return 0
+
+    report = store.ensure_seeded()
+    created = sorted(name for name, is_new in report.items() if is_new)
+    if created:
+        print(f"已补齐缺失模块 {len(created)} 个：{'、'.join(created)}（其余模块保持原样）")
+    else:
+        print(f"数据文件已存在且完整，未做任何改动：{settings.data_file}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

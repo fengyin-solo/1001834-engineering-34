@@ -1,11 +1,13 @@
 """城市地下管网巡检养护平台 后端服务入口。
 
-启动：uvicorn app.main:app --host 127.0.0.1 --port 8000
+启动：cd backend && ./run.sh（地址端口以根目录 .env 为准）
 健康检查：GET /api/health
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from collections.abc import Awaitable, Callable
+
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -21,6 +23,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.middleware("http")
+async def persist_store_after_write(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """写请求完成后把数据落盘：重启、换机器、重建容器都不丢已录入的数据。"""
+    response = await call_next(request)
+    if request.method in _WRITE_METHODS and response.status_code < 500:
+        store.persist()
+    return response
 
 for module in ROUTERS:
     app.include_router(module.router)

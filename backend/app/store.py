@@ -1,19 +1,71 @@
-"""内存数据仓库：给每个业务模块准备一份可筛选、可流转的示例数据。
+"""数据仓库：示例数据落在 JSON 文件里，重启、换机器、进容器都不用重录。
 
-真实项目里这里会换成数据库访问层；当前实现只依赖标准库，保证克隆下来就能起。
+- 文件位置由配置 DATA_FILE 决定（默认 backend/data/store.json，已加入 .gitignore）。
+- 文件不存在时用内置样例初始化；已存在时原样加载，启动过程绝不重置已有数据。
+- 写请求处理后由 main.py 的中间件统一落盘；命令行可用 python -m app.seed 幂等补齐。
 """
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any
 
+from app.config import settings
 from app.seed import SEED_ROWS
 
 
+def _seed_tables() -> dict[str, list[dict[str, Any]]]:
+    return {name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()}
+
+
 class Store:
-    def __init__(self) -> None:
-        self._tables: dict[str, list[dict[str, Any]]] = {
-            name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
-        }
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        # 标记本次启动是否新建了数据文件，供 seed 命令打印准确的初始化结果
+        self.created_on_load = False
+        if path.exists():
+            self._tables = self._read()
+        else:
+            self._tables = _seed_tables()
+            self.created_on_load = True
+            self.persist()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def _read(self) -> dict[str, list[dict[str, Any]]]:
+        with self._path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {str(name): [dict(row) for row in rows] for name, rows in data.items()}
+
+    def persist(self) -> None:
+        """原子落盘：先写临时文件再替换，避免中途异常留下半个文件。"""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(self._tables, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, self._path)
+
+    def reset_to_seed(self) -> None:
+        """显式重建：只有 python -m app.seed --reset 会走到，启动流程不会调用。"""
+        self._tables = _seed_tables()
+
+    def ensure_seeded(self) -> dict[str, bool]:
+        """幂等补齐缺失模块：已有模块原样保留。返回 {模块: 是否本次新建}。"""
+        report: dict[str, bool] = {}
+        changed = False
+        for name, rows in SEED_ROWS.items():
+            if name in self._tables:
+                report[name] = False
+            else:
+                self._tables[name] = [dict(row) for row in rows]
+                report[name] = True
+                changed = True
+        if changed:
+            self.persist()
+        return report
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -46,4 +98,4 @@ class Store:
         return {"cards": cards, "modules": modules}
 
 
-store = Store()
+store = Store(settings.data_file)
